@@ -4,153 +4,92 @@ import pandas as pd
 import ta
 import joblib
 import time
+import requests
 
-# =========================
-# PAGE CONFIG
-# =========================
-st.set_page_config(layout="wide")
+# ==========================================
+# 1. CONFIGURATION & LANGUAGES
+# ==========================================
+st.set_page_config(layout="wide", page_title="AI Swing Trader - Kucoin")
 
-# =========================
-# LANGUAGES
-# =========================
-languages = {
+translations = {
     "English": {
-        "title": "📊 AI PRO Swing Dashboard",
-        "coin": "📌 Coin",
-        "tf": "⏱️ Timeframe",
-        "price": "💰 Live Prices",
-        "signal": "📈 AI Signal"
+        "title": "📊 AI Swing Trading Dashboard",
+        "coin": "📌 Select Coin",
+        "tf": "⏱️ Select Timeframe",
+        "price": "💰 Live Market Prices",
+        "entry": "🎯 Swing Entry Zone",
+        "target": "🚀 Swing Target",
+        "signal": "📈 AI Analysis Signal",
+        "lang": "🌐 Interface Language"
     },
     "Arabic": {
-        "title": "📊 لوحة التداول الاحترافية",
-        "coin": "📌 العملة",
-        "tf": "⏱️ الفريم",
-        "price": "💰 الأسعار",
-        "signal": "📈 الإشارة"
+        "title": "📊 لوحة التداول بالذكاء الاصطناعي",
+        "coin": "📌 اختر العملة",
+        "tf": "⏱️ اختر الفريم",
+        "price": "💰 الأسعار المباشرة",
+        "entry": "🎯 منطقة الدخول",
+        "target": "🚀 الهدف",
+        "signal": "📈 إشارة الذكاء الاصطناعي",
+        "lang": "🌐 اللغة"
     }
 }
 
-lang = st.sidebar.selectbox("Language", list(languages.keys()))
-t = languages[lang]
+st.sidebar.header("🛠️ Settings")
 
-st.title(t["title"])
+selected_lang = st.sidebar.selectbox("Language", list(translations.keys()))
+t = translations[selected_lang]
 
-# =========================
-# LOAD MODEL
-# =========================
+# ==========================================
+# 2. MODEL
+# ==========================================
 @st.cache_resource
 def load_model():
     return joblib.load("ai_trading_model.pkl")
 
 model = load_model()
 
-# =========================
-# EXCHANGE
-# =========================
-exchange = ccxt.kucoin({'enableRateLimit': True})
+# ==========================================
+# 3. EXCHANGES (FALLBACK SYSTEM)
+# ==========================================
+kucoin = ccxt.kucoin({'enableRateLimit': True})
+coinbase = ccxt.coinbase({'enableRateLimit': True})
+okx = ccxt.okx({'enableRateLimit': True})
 
-# =========================
-# SETTINGS
-# =========================
+def get_price(symbol):
+    # Binance REST
+    try:
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT"
+        r = requests.get(url, timeout=2).json()
+        return float(r["price"])
+    except:
+        pass
+
+    # KuCoin
+    try:
+        return float(kucoin.fetch_ticker(f"{symbol}/USDT")["last"])
+    except:
+        pass
+
+    # OKX
+    try:
+        return float(okx.fetch_ticker(f"{symbol}/USDT")["last"])
+    except:
+        pass
+
+    # Coinbase
+    try:
+        return float(coinbase.fetch_ticker(f"{symbol}/USDT")["last"])
+    except:
+        pass
+
+    return None
+
+# ==========================================
+# 4. MARKET DATA
+# ==========================================
+exchange = kucoin
+
 COINS = ["BTC", "ETH", "SOL", "SUI", "ANKR", "BNB"]
 TF_MAP = {"1D": "1d", "4H": "4h", "1H": "1h", "15M": "15m"}
 
-coin = st.sidebar.selectbox(t["coin"], COINS)
-tf = st.sidebar.selectbox(t["tf"], list(TF_MAP.keys()))
-timeframe = TF_MAP[tf]
-
-# =========================
-# FETCH DATA (CACHED)
-# =========================
-@st.cache_data(ttl=10)
-def get_data(symbol, timeframe):
-    try:
-        bars = exchange.fetch_ohlcv(f"{symbol}/USDT", timeframe=timeframe, limit=200)
-
-        df = pd.DataFrame(bars, columns=[
-            "time","open","high","low","close","volume"
-        ])
-
-        df["close"] = df["close"].astype(float)
-
-        df["rsi"] = ta.momentum.rsi(df["close"], 14)
-        df["ema50"] = ta.trend.ema_indicator(df["close"], 50)
-        df["ema200"] = ta.trend.ema_indicator(df["close"], 200)
-        df["return"] = df["close"].pct_change()
-        df["volatility"] = df["close"].rolling(10).std()
-
-        return df.dropna()
-
-    except:
-        return None
-
-# =========================
-# LIVE PRICES (SMOOTH UI)
-# =========================
-st.subheader(t["price"])
-
-price_boxes = {}
-cols = st.columns(len(COINS))
-
-for i, c in enumerate(COINS):
-    price_boxes[c] = cols[i].empty()
-
-# =========================
-# SIGNAL AREA
-# =========================
-signal_box = st.empty()
-
-# =========================
-# MAIN LOOP (NO FULL REFRESH)
-# =========================
-while True:
-
-    # -------- LIVE PRICES --------
-    for c in COINS:
-        try:
-            ticker = exchange.fetch_ticker(f"{c}/USDT")
-            price_boxes[c].metric(c, f"${ticker['last']:.2f}")
-        except:
-            price_boxes[c].metric(c, "—")
-
-    # -------- AI ANALYSIS --------
-    df = get_data(coin, timeframe)
-
-    if df is not None and model:
-
-        last = df.iloc[-1]
-
-        features = [[
-            last["rsi"],
-            last["ema50"],
-            last["ema200"],
-            last["return"],
-            last["volatility"]
-        ]]
-
-        proba = model.predict_proba(features)[0]
-        buy, sell = proba[1], proba[0]
-
-        price = last["close"]
-        entry = last["ema50"]
-        target = entry * 1.12
-        stop = entry * 0.97
-
-        if buy > 0.7:
-            signal = "🟢 BUY"
-        elif sell > 0.7:
-            signal = "🔴 SELL"
-        else:
-            signal = "⚪ WAIT"
-
-        signal_box.markdown(f"""
-        ## {t['signal']}
-        ### {signal}
-
-        💰 Price: `{price:.2f}`  
-        🎯 Entry: `{entry:.2f}`  
-        🚀 Target: `{target:.2f}`  
-        ❌ Stop: `{stop:.2f}`  
-        """)
-
-    time.sleep(2)
+coin = st
