@@ -3,41 +3,40 @@ import joblib
 import requests
 import pandas as pd
 import ta
-from streamlit_autorefresh import st_autorefresh
-
-# =========================
-# AUTO REFRESH (IMPORTANT)
-# =========================
-st_autorefresh(interval=5000, key="refresh")  # كل 5 ثواني
+import time
 
 # =========================
 # CONFIG
 # =========================
 st.set_page_config(layout="wide")
-st.title("📊 AI Professional Trading Dashboard")
+st.title("📊 AI Trading Pro Dashboard")
 
 model = joblib.load("ai_trading_model.pkl")
 
 # =========================
-# PRICE API (FAST)
+# COINS
 # =========================
-@st.cache_data(ttl=10)
-def get_all_prices():
+coins = ["BTC", "ETH", "SOL", "SUI", "ANKR", "BNB"]
+
+mapping = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "BNB": "binancecoin",
+    "ANKR": "ankr",
+    "SUI": "sui"
+}
+
+# =========================
+# LIVE PRICE (FAST BINANCE)
+# =========================
+def get_price(symbol):
     try:
-        url = "https://api.coingecko.com/api/v3/simple/price"
-
-        ids = "bitcoin,ethereum,solana,binancecoin,ankr,sui"
-
-        r = requests.get(
-            url,
-            params={"ids": ids, "vs_currencies": "usd"},
-            timeout=10
-        )
-
-        return r.json()
-
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT"
+        r = requests.get(url, timeout=5).json()
+        return float(r["price"])
     except:
-        return {}
+        return None
 
 # =========================
 # CANDLE DATA
@@ -68,7 +67,6 @@ def get_data(symbol, interval):
 
         df["close"] = df["close"].astype(float)
 
-        # Indicators
         df["rsi"] = ta.momentum.rsi(df["close"], 14)
         df["ema50"] = ta.trend.ema_indicator(df["close"], 50)
         df["ema200"] = ta.trend.ema_indicator(df["close"], 200)
@@ -82,19 +80,8 @@ def get_data(symbol, interval):
         return None
 
 # =========================
-# UI
+# TIMEFRAMES
 # =========================
-coins = ["BTC", "ETH", "SOL", "SUI", "ANKR", "BNB"]
-
-mapping = {
-    "BTC": "bitcoin",
-    "ETH": "ethereum",
-    "SOL": "solana",
-    "BNB": "binancecoin",
-    "ANKR": "ankr",
-    "SUI": "sui"
-}
-
 timeframes = {
     "1D": "1d",
     "4H": "4h",
@@ -105,72 +92,80 @@ timeframes = {
 symbol = st.selectbox("📌 Select Coin", coins)
 
 # =========================
-# LIVE PRICES
+# LIVE PRICE AREA (NO FULL REFRESH)
 # =========================
 st.subheader("💰 Live Prices")
 
-prices = get_all_prices()
-
+price_boxes = {}
 cols = st.columns(len(coins))
 
 for i, c in enumerate(coins):
-    coin_id = mapping.get(c)
-    price = prices.get(coin_id, {}).get("usd")
+    price_boxes[c] = cols[i].empty()
 
-    if price:
-        cols[i].metric(c, f"${price:,.4f}")
+# =========================
+# SIGNAL AREA
+# =========================
+st.subheader(f"📈 AI Signals: {symbol}")
+
+signal_box = st.empty()
+
+# =========================
+# MAIN LOOP (LIGHTWEIGHT)
+# =========================
+while True:
+
+    # -------- LIVE PRICES --------
+    for c in coins:
+        price = get_price(c)
+
+        if price:
+            price_boxes[c].metric(c, f"${price:,.2f}")
+        else:
+            price_boxes[c].metric(c, "—")
+
+    # -------- AI ANALYSIS --------
+    signals = {}
+
+    for tf_name, tf_value in timeframes.items():
+
+        df = get_data(symbol, tf_value)
+
+        if df is None:
+            continue
+
+        last = df.iloc[-1]
+
+        features = [[
+            last["rsi"],
+            last["ema50"],
+            last["ema200"],
+            last["return"],
+            last["volatility"]
+        ]]
+
+        proba = model.predict_proba(features)[0]
+        buy, sell = proba[1], proba[0]
+
+        if buy > 0.7:
+            signal = "🟢 BUY"
+        elif sell > 0.7:
+            signal = "🔴 SELL"
+        else:
+            signal = "⚪ WAIT"
+
+        signals[tf_name] = signal
+
+    buy_count = list(signals.values()).count("🟢 BUY")
+    sell_count = list(signals.values()).count("🔴 SELL")
+
+    if signals.get("1D") == "🟢 BUY" and buy_count >= 2:
+        final = "🟢 STRONG BUY"
+    elif signals.get("1D") == "🔴 SELL" and sell_count >= 2:
+        final = "🔴 STRONG SELL"
     else:
-        cols[i].metric(c, "—")
+        final = "⚪ NO CLEAR SIGNAL"
 
-# =========================
-# ANALYSIS
-# =========================
-st.subheader(f"📈 Signal Analysis: {symbol}")
+    signal_box.markdown(f"## {final}")
 
-signals = {}
-
-for tf_name, tf_value in timeframes.items():
-
-    df = get_data(symbol, tf_value)
-
-    if df is None or len(df) == 0:
-        continue
-
-    last = df.iloc[-1]
-
-    features = [[
-        last["rsi"],
-        last["ema50"],
-        last["ema200"],
-        last["return"],
-        last["volatility"]
-    ]]
-
-    proba = model.predict_proba(features)[0]
-    buy, sell = proba[1], proba[0]
-
-    if buy > 0.7:
-        signal = "🟢 BUY"
-    elif sell > 0.7:
-        signal = "🔴 SELL"
-    else:
-        signal = "⚪ WAIT"
-
-    signals[tf_name] = signal
-
-    st.write(f"**{tf_name}:** {signal} ({buy:.2f}/{sell:.2f})")
-
-# =========================
-# FINAL DECISION
-# =========================
-st.subheader("🎯 FINAL DECISION")
-
-buy_count = list(signals.values()).count("🟢 BUY")
-sell_count = list(signals.values()).count("🔴 SELL")
-
-if signals.get("1D") == "🟢 BUY" and buy_count >= 2:
-    st.success("🟢 STRONG LONG TERM BUY")
-elif signals.get("1D") == "🔴 SELL" and sell_count >= 2:
-    st.error("🔴 STRONG LONG TERM SELL")
-else:
-    st.warning("⚪ NO CLEAR SIGNAL")
+    # -------- SLEEP --------
+    time.sleep(2)
