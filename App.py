@@ -13,39 +13,25 @@ st.title("📊 AI Professional Trading Dashboard")
 model = joblib.load("ai_trading_model.pkl")
 
 # =========================
-# PRICE API (100% STABLE)
+# FAST PRICE LAYER (BATCH + CACHE)
 # =========================
-def get_price(symbol):
+@st.cache_data(ttl=15)
+def get_all_prices():
     try:
-        coin_map = {
-            "BTC": "bitcoin",
-            "ETH": "ethereum",
-            "SOL": "solana",
-            "BNB": "binancecoin",
-            "ANKR": "ankr",
-            "SUI": "sui"
-        }
-
-        coin_id = coin_map.get(symbol)
-        if not coin_id:
-            return None
-
         url = "https://api.coingecko.com/api/v3/simple/price"
+
+        ids = "bitcoin,ethereum,solana,binancecoin,ankr,sui"
+
         r = requests.get(
             url,
-            params={"ids": coin_id, "vs_currencies": "usd"},
+            params={"ids": ids, "vs_currencies": "usd"},
             timeout=10
         )
 
-        if r.status_code != 200:
-            return None
-
-        data = r.json()
-        return float(data.get(coin_id, {}).get("usd", 0))
+        return r.json()
 
     except:
-        return None
-
+        return {}
 
 # =========================
 # CANDLE DATA (Binance)
@@ -89,85 +75,11 @@ def get_data(symbol, interval):
     except:
         return None
 
-
 # =========================
 # UI
 # =========================
 coins = ["BTC", "ETH", "SOL", "SUI", "ANKR", "BNB"]
 
-timeframes = {
-    "1D": "1d",
-    "4H": "4h",
-    "1H": "1h",
-    "15M": "15m"
-}
-
-symbol = st.selectbox("📌 Select Coin", coins)
-
-# =========================
-# LIVE PRICES
-# =========================
-st.subheader("💰 Live Prices")
-
-cols = st.columns(len(coins))
-
-for i, c in enumerate(coins):
-    price = get_price(c)
-
-    if price and price > 0:
-        cols[i].metric(c, f"${price:,.4f}")
-    else:
-        cols[i].metric(c, "Loading...")
-
-# =========================
-# ANALYSIS ENGINE
-# =========================
-st.subheader(f"📈 Signal Analysis: {symbol}")
-
-signals = {}
-
-for tf_name, tf_value in timeframes.items():
-
-    df = get_data(symbol, tf_value)
-
-    if df is None or len(df) == 0:
-        continue
-
-    last = df.iloc[-1]
-
-    features = [[
-        last["rsi"],
-        last["ema50"],
-        last["ema200"],
-        last["return"],
-        last["volatility"]
-    ]]
-
-    proba = model.predict_proba(features)[0]
-    buy, sell = proba[1], proba[0]
-
-    if buy > 0.7:
-        signal = "🟢 BUY"
-    elif sell > 0.7:
-        signal = "🔴 SELL"
-    else:
-        signal = "⚪ WAIT"
-
-    signals[tf_name] = signal
-
-    st.write(f"**{tf_name}:** {signal} ({buy:.2f}/{sell:.2f})")
-
-# =========================
-# FINAL DECISION
-# =========================
-st.subheader("🎯 FINAL DECISION")
-
-buy_count = list(signals.values()).count("🟢 BUY")
-sell_count = list(signals.values()).count("🔴 SELL")
-
-if signals.get("1D") == "🟢 BUY" and buy_count >= 2:
-    st.success("🟢 STRONG LONG TERM BUY")
-elif signals.get("1D") == "🔴 SELL" and sell_count >= 2:
-    st.error("🔴 STRONG LONG TERM SELL")
-else:
-    st.warning("⚪ NO CLEAR SIGNAL")
+mapping = {
+    "BTC": "bitcoin",
+    "
