@@ -3,6 +3,12 @@ import joblib
 import requests
 import pandas as pd
 import ta
+from streamlit_autorefresh import st_autorefresh
+
+# =========================
+# AUTO REFRESH (IMPORTANT)
+# =========================
+st_autorefresh(interval=5000, key="refresh")  # كل 5 ثواني
 
 # =========================
 # CONFIG
@@ -13,9 +19,9 @@ st.title("📊 AI Professional Trading Dashboard")
 model = joblib.load("ai_trading_model.pkl")
 
 # =========================
-# PRICE API (FAST + SAFE)
+# PRICE API (FAST)
 # =========================
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=10)
 def get_all_prices():
     try:
         url = "https://api.coingecko.com/api/v3/simple/price"
@@ -52,7 +58,7 @@ def get_data(symbol, interval):
 
         data = r.json()
 
-        if not isinstance(data, list):
+        if not isinstance(data, list) or len(data) < 50:
             return None
 
         df = pd.DataFrame(data, columns=[
@@ -62,6 +68,7 @@ def get_data(symbol, interval):
 
         df["close"] = df["close"].astype(float)
 
+        # Indicators
         df["rsi"] = ta.momentum.rsi(df["close"], 14)
         df["ema50"] = ta.trend.ema_indicator(df["close"], 50)
         df["ema200"] = ta.trend.ema_indicator(df["close"], 200)
@@ -75,7 +82,7 @@ def get_data(symbol, interval):
         return None
 
 # =========================
-# UI SETTINGS
+# UI
 # =========================
 coins = ["BTC", "ETH", "SOL", "SUI", "ANKR", "BNB"]
 
