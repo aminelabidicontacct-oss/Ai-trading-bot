@@ -13,20 +13,22 @@ st.title("📊 AI Professional Trading Dashboard")
 model = joblib.load("ai_trading_model.pkl")
 
 # =========================
-# SAFE API LAYER
+# SAFE PRICE API (ROBUST)
 # =========================
-
-BASE_URL = "https://api.binance.com/api/v3"
-
-
 def get_price(symbol):
     try:
-        url = f"{BASE_URL}/ticker/price"
+        url = f"https://api.binance.com/api/v3/ticker/price"
         params = {"symbol": f"{symbol}USDT"}
 
         r = requests.get(url, params=params, timeout=5)
+
+        # if request fails
+        if r.status_code != 200:
+            return None
+
         data = r.json()
 
+        # safety check
         if isinstance(data, dict) and "price" in data:
             return float(data["price"])
 
@@ -36,9 +38,12 @@ def get_price(symbol):
         return None
 
 
+# =========================
+# SAFE CANDLE DATA
+# =========================
 def get_data(symbol, interval):
     try:
-        url = f"{BASE_URL}/klines"
+        url = "https://api.binance.com/api/v3/klines"
         params = {
             "symbol": f"{symbol}USDT",
             "interval": interval,
@@ -46,6 +51,10 @@ def get_data(symbol, interval):
         }
 
         r = requests.get(url, params=params, timeout=5)
+
+        if r.status_code != 200:
+            return None
+
         data = r.json()
 
         if not isinstance(data, list):
@@ -58,7 +67,7 @@ def get_data(symbol, interval):
 
         df["close"] = df["close"].astype(float)
 
-        # Indicators
+        # indicators
         df["rsi"] = ta.momentum.rsi(df["close"], 14)
         df["ema50"] = ta.trend.ema_indicator(df["close"], 50)
         df["ema200"] = ta.trend.ema_indicator(df["close"], 200)
@@ -87,7 +96,7 @@ timeframes = {
 symbol = st.selectbox("📌 Select Coin", coins)
 
 # =========================
-# LIVE PRICES
+# LIVE PRICES (SAFE DISPLAY)
 # =========================
 st.subheader("💰 Live Prices")
 
@@ -96,10 +105,10 @@ cols = st.columns(len(coins))
 for i, c in enumerate(coins):
     price = get_price(c)
 
-    if price is not None and price > 0:
-        cols[i].metric(c, f"${price:,.4f}")
-    else:
+    if price is None or price == 0:
         cols[i].metric(c, "⛔ No Data")
+    else:
+        cols[i].metric(c, f"${price:,.4f}")
 
 # =========================
 # ANALYSIS ENGINE
