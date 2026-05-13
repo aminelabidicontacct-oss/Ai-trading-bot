@@ -13,33 +13,37 @@ st.title("📊 AI Professional Trading Dashboard")
 model = joblib.load("ai_trading_model.pkl")
 
 # =========================
-# SAFE PRICE API (ROBUST)
+# PRICE API (STABLE)
 # =========================
 def get_price(symbol):
     try:
-        url = f"https://api.binance.com/api/v3/ticker/price"
-        params = {"symbol": f"{symbol}USDT"}
+        coin_map = {
+            "BTC": "bitcoin",
+            "ETH": "ethereum",
+            "SOL": "solana",
+            "BNB": "binancecoin",
+            "ANKR": "ankr",
+            "SUI": "sui"
+        }
 
-        r = requests.get(url, params=params, timeout=5)
-
-        # if request fails
-        if r.status_code != 200:
+        coin_id = coin_map.get(symbol)
+        if not coin_id:
             return None
 
+        url = "https://api.coingecko.com/api/v3/simple/price"
+        params = {"ids": coin_id, "vs_currencies": "usd"}
+
+        r = requests.get(url, params=params, timeout=5)
         data = r.json()
 
-        # safety check
-        if isinstance(data, dict) and "price" in data:
-            return float(data["price"])
-
-        return None
+        return float(data[coin_id]["usd"])
 
     except:
         return None
 
 
 # =========================
-# SAFE CANDLE DATA
+# CANDLE DATA (Binance for analysis)
 # =========================
 def get_data(symbol, interval):
     try:
@@ -51,10 +55,6 @@ def get_data(symbol, interval):
         }
 
         r = requests.get(url, params=params, timeout=5)
-
-        if r.status_code != 200:
-            return None
-
         data = r.json()
 
         if not isinstance(data, list):
@@ -96,7 +96,7 @@ timeframes = {
 symbol = st.selectbox("📌 Select Coin", coins)
 
 # =========================
-# LIVE PRICES (SAFE DISPLAY)
+# LIVE PRICES
 # =========================
 st.subheader("💰 Live Prices")
 
@@ -105,10 +105,10 @@ cols = st.columns(len(coins))
 for i, c in enumerate(coins):
     price = get_price(c)
 
-    if price is None or price == 0:
-        cols[i].metric(c, "⛔ No Data")
-    else:
+    if price:
         cols[i].metric(c, f"${price:,.4f}")
+    else:
+        cols[i].metric(c, "N/A")
 
 # =========================
 # ANALYSIS ENGINE
