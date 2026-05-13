@@ -1,171 +1,119 @@
 import streamlit as st
-import joblib
-import requests
+import ccxt
 import pandas as pd
 import ta
+import joblib
 import time
 
-# =========================
-# CONFIG
-# =========================
-st.set_page_config(layout="wide")
-st.title("📊 AI Trading Pro Dashboard")
+# ==========================================
+# 1. الإعدادات العامة (Configuration)
+# ==========================================
+st.set_page_config(layout="wide", page_title="AI Trading Pro - Kucoin")
+st.title("📊 AI Trading Dashboard (Kucoin Edition)")
 
-model = joblib.load("ai_trading_model.pkl")
-
-# =========================
-# COINS
-# =========================
-coins = ["BTC", "ETH", "SOL", "SUI", "ANKR", "BNB"]
-
-mapping = {
-    "BTC": "bitcoin",
-    "ETH": "ethereum",
-    "SOL": "solana",
-    "BNB": "binancecoin",
-    "ANKR": "ankr",
-    "SUI": "sui"
-}
-
-# =========================
-# LIVE PRICE (FAST BINANCE)
-# =========================
-def get_price(symbol):
+# تحميل النموذج (AI Model)
+@st.cache_resource
+def load_model():
     try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT"
-        r = requests.get(url, timeout=5).json()
-        return float(r["price"])
+        return joblib.load("ai_trading_model.pkl")
     except:
+        st.error("⚠️ ملف النموذج 'ai_trading_model.pkl' غير موجود في المسار!")
         return None
 
-# =========================
-# CANDLE DATA
-# =========================
-def get_data(symbol, interval):
+model = load_model()
+
+# الاتصال بمنصة Kucoin
+exchange = ccxt.kucoin({
+    'enableRateLimit': True,
+})
+
+# القائمة والعملات (نفس التي تتابعها)
+COINS = ["BTC", "ETH", "SOL", "SUI", "ANKR", "BNB"]
+TIMEFRAMES = {"1D": "1d", "4H": "4h", "1H": "1h", "15M": "15m"}
+
+# ==========================================
+# 2. جلب وتحليل البيانات (Data Logic)
+# ==========================================
+def fetch_and_analyze(symbol, timeframe):
+    """جلب البيانات من Kucoin وحساب المؤشرات"""
     try:
-        url = "https://api.binance.com/api/v3/klines"
-
-        r = requests.get(
-            url,
-            params={
-                "symbol": f"{symbol}USDT",
-                "interval": interval,
-                "limit": 200
-            },
-            timeout=10
-        )
-
-        data = r.json()
-
-        if not isinstance(data, list) or len(data) < 50:
-            return None
-
-        df = pd.DataFrame(data, columns=[
-            "time","open","high","low","close","volume",
-            "_","_","_","_","_","_"
-        ])
-
-        df["close"] = df["close"].astype(float)
-
-        df["rsi"] = ta.momentum.rsi(df["close"], 14)
-        df["ema50"] = ta.trend.ema_indicator(df["close"], 50)
-        df["ema200"] = ta.trend.ema_indicator(df["close"], 200)
-        df["return"] = df["close"].pct_change()
-        df["volatility"] = df["close"].rolling(10).std()
-
-        df = df.dropna()
-        return df
-
-    except:
+        # جلب الشموع (OHLCV)
+        bars = exchange.fetch_ohlcv(f"{symbol}/USDT", timeframe=timeframe, limit=200)
+        df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        
+        # حساب المؤشرات الفنية
+        df['rsi'] = ta.momentum.rsi(df['close'], window=14)
+        df['ema50'] = ta.trend.ema_indicator(df['close'], window=50)
+        df['ema200'] = ta.trend.ema_indicator(df['close'], window=200)
+        df['return'] = df['close'].pct_change()
+        df['volatility'] = df['close'].rolling(10).std()
+        
+        return df.dropna().iloc[-1] # إرجاع آخر شمعة مكتملة
+    except Exception as e:
         return None
 
-# =========================
-# TIMEFRAMES
-# =========================
-timeframes = {
-    "1D": "1d",
-    "4H": "4h",
-    "1H": "1h",
-    "15M": "15m"
-}
+# ==========================================
+# 3. واجهة المستخدم (UI Layout)
+# ==========================================
+selected_symbol = st.sidebar.selectbox("📌 اختر العملة للتحليل", COINS)
+st.sidebar.info("يتم تحديث البيانات من منصة Kucoin تلقائياً.")
 
-symbol = st.selectbox("📌 Select Coin", coins)
+# عرض الأسعار المباشرة في الأعلى
+st.subheader("💰 الأسعار الحالية (Live)")
+price_cols = st.columns(len(COINS))
+price_placeholders = [col.empty() for col in price_cols]
 
-# =========================
-# LIVE PRICE AREA (NO FULL REFRESH)
-# =========================
-st.subheader("💰 Live Prices")
+# منطقة عرض إشارة الذكاء الاصطناعي
+st.divider()
+st.subheader(f"📈 إشارات الذكاء الاصطناعي: {selected_symbol}")
+signal_placeholder = st.empty()
 
-price_boxes = {}
-cols = st.columns(len(coins))
-
-for i, c in enumerate(coins):
-    price_boxes[c] = cols[i].empty()
-
-# =========================
-# SIGNAL AREA
-# =========================
-st.subheader(f"📈 AI Signals: {symbol}")
-
-signal_box = st.empty()
-
-# =========================
-# MAIN LOOP (LIGHTWEIGHT)
-# =========================
+# ==========================================
+# 4. الحلقة الرئيسية (Execution Loop)
+# ==========================================
 while True:
+    # أ. تحديث الأسعار لكل العملات
+    for i, coin in enumerate(COINS):
+        try:
+            ticker = exchange.fetch_ticker(f"{coin}/USDT")
+            price = ticker['last']
+            price_placeholders[i].metric(coin, f"${price:,.4f}")
+        except:
+            price_placeholders[i].metric(coin, "N/A")
 
-    # -------- LIVE PRICES --------
-    for c in coins:
-        price = get_price(c)
-
-        if price:
-            price_boxes[c].metric(c, f"${price:,.2f}")
-        else:
-            price_boxes[c].metric(c, "—")
-
-    # -------- AI ANALYSIS --------
-    signals = {}
-
-    for tf_name, tf_value in timeframes.items():
-
-        df = get_data(symbol, tf_value)
-
-        if df is None:
-            continue
-
-        last = df.iloc[-1]
-
-        features = [[
-            last["rsi"],
-            last["ema50"],
-            last["ema200"],
-            last["return"],
-            last["volatility"]
-        ]]
-
-        proba = model.predict_proba(features)[0]
-        buy, sell = proba[1], proba[0]
-
-        if buy > 0.7:
-            signal = "🟢 BUY"
-        elif sell > 0.7:
-            signal = "🔴 SELL"
-        else:
-            signal = "⚪ WAIT"
-
-        signals[tf_name] = signal
-
-    buy_count = list(signals.values()).count("🟢 BUY")
-    sell_count = list(signals.values()).count("🔴 SELL")
-
-    if signals.get("1D") == "🟢 BUY" and buy_count >= 2:
-        final = "🟢 STRONG BUY"
-    elif signals.get("1D") == "🔴 SELL" and sell_count >= 2:
-        final = "🔴 STRONG SELL"
-    else:
-        final = "⚪ NO CLEAR SIGNAL"
-
-    signal_box.markdown(f"## {final}")
-
-    # -------- SLEEP --------
-    time.sleep(2)
+    # ب. تحليل العملة المختارة بالذكاء الاصطناعي
+    if model:
+        last_data = fetch_and_analyze(selected_symbol, "1h")
+        
+        if last_data is not None:
+            # تجهيز الميزات للنموذج
+            features = [[
+                last_data['rsi'], 
+                last_data['ema50'], 
+                last_data['ema200'], 
+                last_data['return'], 
+                last_data['volatility']
+            ]]
+            
+            # التنبؤ
+            proba = model.predict_proba(features)[0]
+            buy_score = proba[1]
+            
+            if buy_score > 0.7:
+                status, color = "🟢 شراء قوي (Strong Buy)", "green"
+            elif buy_score < 0.3:
+                status, color = "🔴 بيع (Sell)", "red"
+            else:
+                status, color = "⚪ انتظار (Neutral)", "gray"
+            
+            signal_placeholder.markdown(
+                f"<div style='padding:20px; border-radius:10px; background-color:#1e1e1e; border: 2px solid {color};'>"
+                f"<h2 style='color:{color}; text-align:center;'>{status}</h2>"
+                f"<p style='text-align:center;'>إحتمالية الصعود: {buy_score:.2%}</p>"
+                f"</div>", 
+                unsafe_allow_html=True
+            )
+    
+    # انتظار قبل التحديث القادم لتجنب الحظر من Kucoin
+    time.sleep(10)
+    
