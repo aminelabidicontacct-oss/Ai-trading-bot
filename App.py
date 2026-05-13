@@ -15,13 +15,21 @@ model = joblib.load("ai_trading_model.pkl")
 # =========================
 # SAFE API LAYER
 # =========================
+
+BASE_URL = "https://api.binance.com/api/v3"
+
+
 def get_price(symbol):
     try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT"
-        data = requests.get(url, timeout=5).json()
+        url = f"{BASE_URL}/ticker/price"
+        params = {"symbol": f"{symbol}USDT"}
 
-        if "price" in data:
+        r = requests.get(url, params=params, timeout=5)
+        data = r.json()
+
+        if isinstance(data, dict) and "price" in data:
             return float(data["price"])
+
         return None
 
     except:
@@ -30,8 +38,18 @@ def get_price(symbol):
 
 def get_data(symbol, interval):
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval={interval}&limit=200"
-        data = requests.get(url, timeout=5).json()
+        url = f"{BASE_URL}/klines"
+        params = {
+            "symbol": f"{symbol}USDT",
+            "interval": interval,
+            "limit": 200
+        }
+
+        r = requests.get(url, params=params, timeout=5)
+        data = r.json()
+
+        if not isinstance(data, list):
+            return None
 
         df = pd.DataFrame(data, columns=[
             "time","open","high","low","close","volume",
@@ -40,6 +58,7 @@ def get_data(symbol, interval):
 
         df["close"] = df["close"].astype(float)
 
+        # Indicators
         df["rsi"] = ta.momentum.rsi(df["close"], 14)
         df["ema50"] = ta.trend.ema_indicator(df["close"], 50)
         df["ema200"] = ta.trend.ema_indicator(df["close"], 200)
@@ -51,6 +70,7 @@ def get_data(symbol, interval):
 
     except:
         return None
+
 
 # =========================
 # UI
@@ -76,13 +96,13 @@ cols = st.columns(len(coins))
 for i, c in enumerate(coins):
     price = get_price(c)
 
-    if price is not None:
-        cols[i].metric(c, f"${price:,.2f}")
+    if price is not None and price > 0:
+        cols[i].metric(c, f"${price:,.4f}")
     else:
-        cols[i].metric(c, "N/A")
+        cols[i].metric(c, "⛔ No Data")
 
 # =========================
-# ANALYSIS
+# ANALYSIS ENGINE
 # =========================
 st.subheader(f"📈 Signal Analysis: {symbol}")
 
