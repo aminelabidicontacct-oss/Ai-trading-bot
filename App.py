@@ -13,7 +13,7 @@ st.title("📊 AI Professional Trading Dashboard")
 model = joblib.load("ai_trading_model.pkl")
 
 # =========================
-# PRICE API (STABLE)
+# PRICE API (100% STABLE)
 # =========================
 def get_price(symbol):
     try:
@@ -31,30 +31,39 @@ def get_price(symbol):
             return None
 
         url = "https://api.coingecko.com/api/v3/simple/price"
-        params = {"ids": coin_id, "vs_currencies": "usd"}
+        r = requests.get(
+            url,
+            params={"ids": coin_id, "vs_currencies": "usd"},
+            timeout=10
+        )
 
-        r = requests.get(url, params=params, timeout=5)
+        if r.status_code != 200:
+            return None
+
         data = r.json()
-
-        return float(data[coin_id]["usd"])
+        return float(data.get(coin_id, {}).get("usd", 0))
 
     except:
         return None
 
 
 # =========================
-# CANDLE DATA (Binance for analysis)
+# CANDLE DATA (Binance)
 # =========================
 def get_data(symbol, interval):
     try:
         url = "https://api.binance.com/api/v3/klines"
-        params = {
-            "symbol": f"{symbol}USDT",
-            "interval": interval,
-            "limit": 200
-        }
 
-        r = requests.get(url, params=params, timeout=5)
+        r = requests.get(
+            url,
+            params={
+                "symbol": f"{symbol}USDT",
+                "interval": interval,
+                "limit": 200
+            },
+            timeout=10
+        )
+
         data = r.json()
 
         if not isinstance(data, list):
@@ -105,10 +114,10 @@ cols = st.columns(len(coins))
 for i, c in enumerate(coins):
     price = get_price(c)
 
-    if price:
+    if price and price > 0:
         cols[i].metric(c, f"${price:,.4f}")
     else:
-        cols[i].metric(c, "N/A")
+        cols[i].metric(c, "Loading...")
 
 # =========================
 # ANALYSIS ENGINE
@@ -122,7 +131,6 @@ for tf_name, tf_value in timeframes.items():
     df = get_data(symbol, tf_value)
 
     if df is None or len(df) == 0:
-        st.write(f"{tf_name}: ⚠️ No Data")
         continue
 
     last = df.iloc[-1]
