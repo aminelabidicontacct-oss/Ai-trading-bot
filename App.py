@@ -3,93 +3,95 @@ import ccxt
 import pandas as pd
 import ta
 import joblib
-import time
+from streamlit_autorefresh import st_autorefresh
 import requests
 
-# ==========================================
-# 1. CONFIGURATION & LANGUAGES
-# ==========================================
-st.set_page_config(layout="wide", page_title="AI Swing Trader - Kucoin")
+# =========================
+# AUTO REFRESH (IMPORTANT)
+# =========================
+st_autorefresh(interval=5000, key="refresh")
 
-translations = {
-    "English": {
-        "title": "📊 AI Swing Trading Dashboard",
-        "coin": "📌 Select Coin",
-        "tf": "⏱️ Select Timeframe",
-        "price": "💰 Live Market Prices",
-        "entry": "🎯 Swing Entry Zone",
-        "target": "🚀 Swing Target",
-        "signal": "📈 AI Analysis Signal",
-        "lang": "🌐 Interface Language"
-    },
-    "Arabic": {
-        "title": "📊 لوحة التداول بالذكاء الاصطناعي",
-        "coin": "📌 اختر العملة",
-        "tf": "⏱️ اختر الفريم",
-        "price": "💰 الأسعار المباشرة",
-        "entry": "🎯 منطقة الدخول",
-        "target": "🚀 الهدف",
-        "signal": "📈 إشارة الذكاء الاصطناعي",
-        "lang": "🌐 اللغة"
-    }
-}
+# =========================
+# CONFIG
+# =========================
+st.set_page_config(layout="wide")
+st.title("📊 AI Trading Dashboard")
 
-st.sidebar.header("🛠️ Settings")
-
-selected_lang = st.sidebar.selectbox("Language", list(translations.keys()))
-t = translations[selected_lang]
-
-# ==========================================
-# 2. MODEL
-# ==========================================
+# =========================
+# MODEL
+# =========================
 @st.cache_resource
 def load_model():
     return joblib.load("ai_trading_model.pkl")
 
 model = load_model()
 
-# ==========================================
-# 3. EXCHANGES (FALLBACK SYSTEM)
-# ==========================================
-kucoin = ccxt.kucoin({'enableRateLimit': True})
-coinbase = ccxt.coinbase({'enableRateLimit': True})
-okx = ccxt.okx({'enableRateLimit': True})
+# =========================
+# EXCHANGE
+# =========================
+exchange = ccxt.kucoin({'enableRateLimit': True})
 
-def get_price(symbol):
-    # Binance REST
-    try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT"
-        r = requests.get(url, timeout=2).json()
-        return float(r["price"])
-    except:
-        pass
-
-    # KuCoin
-    try:
-        return float(kucoin.fetch_ticker(f"{symbol}/USDT")["last"])
-    except:
-        pass
-
-    # OKX
-    try:
-        return float(okx.fetch_ticker(f"{symbol}/USDT")["last"])
-    except:
-        pass
-
-    # Coinbase
-    try:
-        return float(coinbase.fetch_ticker(f"{symbol}/USDT")["last"])
-    except:
-        pass
-
-    return None
-
-# ==========================================
-# 4. MARKET DATA
-# ==========================================
-exchange = kucoin
-
+# =========================
+# COINS + TF
+# =========================
 COINS = ["BTC", "ETH", "SOL", "SUI", "ANKR", "BNB"]
 TF_MAP = {"1D": "1d", "4H": "4h", "1H": "1h", "15M": "15m"}
 
-coin = st
+coin = st.selectbox("📌 Coin", COINS)
+tf = st.selectbox("⏱️ Timeframe", list(TF_MAP.keys()))
+timeframe = TF_MAP[tf]
+
+# =========================
+# SAFE PRICE FUNCTION
+# =========================
+def get_price(symbol):
+    try:
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT"
+        r = requests.get(url, timeout=3).json()
+        return float(r["price"])
+    except:
+        try:
+            return float(exchange.fetch_ticker(f"{symbol}/USDT")["last"])
+        except:
+            return None
+
+# =========================
+# DATA
+# =========================
+@st.cache_data(ttl=10)
+def get_data(symbol, timeframe):
+    try:
+        bars = exchange.fetch_ohlcv(f"{symbol}/USDT", timeframe=timeframe, limit=200)
+
+        df = pd.DataFrame(bars, columns=[
+            "time","open","high","low","close","volume"
+        ])
+
+        df["close"] = df["close"].astype(float)
+
+        df["rsi"] = ta.momentum.rsi(df["close"], 14)
+        df["ema50"] = ta.trend.ema_indicator(df["close"], 50)
+        df["ema200"] = ta.trend.ema_indicator(df["close"], 200)
+        df["return"] = df["close"].pct_change()
+        df["volatility"] = df["close"].rolling(10).std()
+
+        return df.dropna()
+
+    except:
+        return None
+
+# =========================
+# UI
+# =========================
+st.subheader("💰 Live Prices")
+
+price_cols = st.columns(len(COINS))
+price_boxes = {}
+
+for i, c in enumerate(COINS):
+    price_boxes[c] = price_cols[i].empty()
+
+signal_box = st.empty()
+
+# =========================
+# LIVE UPDATE (
