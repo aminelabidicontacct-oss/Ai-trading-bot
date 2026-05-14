@@ -3,116 +3,154 @@ import ccxt
 import pandas as pd
 import ta
 import joblib
-import requests
+import time
 
-# =========================
-# CONFIG
-# =========================
-st.set_page_config(layout="wide")
-st.title("📊 AI Trading Dashboard")
+# ==========================================
+# 1. CONFIGURATION & MULTI-LANGUAGE
+# ==========================================
+st.set_page_config(layout="wide", page_title="Swing Signal Pro")
 
-# =========================
-# MODEL
-# =========================
-model = joblib.load("ai_trading_model.pkl")
+# Language Dictionary in Sidebar
+translations = {
+    "English": {
+        "title": "⚡ AI Swing Signals",
+        "coin": "Asset",
+        "tf": "Timeframe",
+        "price": "Market Prices",
+        "entry": "Entry Point",
+        "tp": "Take Profit (Target)",
+        "sl": "Stop Loss",
+        "signal": "AI Signal Strength"
+    },
+    "Arabic": {
+        "title": "⚡ إشارات السوينج اليومية",
+        "coin": "العملة",
+        "tf": "الفريم",
+        "price": "أسعار السوق",
+        "entry": "نقطة الدخول",
+        "tp": "الهدف (جني الأرباح)",
+        "sl": "وقف الخسارة",
+        "signal": "قوة الإشارة"
+    },
+    "French": {
+        "title": "⚡ Signaux Swing IA",
+        "coin": "Actif",
+        "tf": "Unité de Temps",
+        "price": "Prix du Marché",
+        "entry": "Point d'Entrée",
+        "tp": "Objectif (TP)",
+        "sl": "Stop Loss",
+        "signal": "Force du Signal"
+    }
+}
 
-# =========================
-# EXCHANGE
-# =========================
+# --- SIDEBAR CONTROL ---
+st.sidebar.header("Control Panel")
+selected_lang = st.sidebar.selectbox("🌐 Language", list(translations.keys()), index=0)
+t = translations[selected_lang]
+
+@st.cache_resource
+def load_model():
+    try:
+        return joblib.load("ai_trading_model.pkl")
+    except:
+        return None
+
+model = load_model()
 exchange = ccxt.kucoin({'enableRateLimit': True})
 
-# =========================
-# COINS + TF
-# =========================
 COINS = ["BTC", "ETH", "SOL", "SUI", "ANKR", "BNB"]
-TF_MAP = {"1D": "1d", "4H": "4h", "1H": "1h", "15M": "15m"}
+TF_MAP = {"4H (Swing)": "4h", "1H (Intraday)": "1h", "15M (Scalp)": "15m"}
 
-coin = st.selectbox("Coin", COINS)
-tf = st.selectbox("Timeframe", list(TF_MAP.keys()))
-timeframe = TF_MAP[tf]
+st.sidebar.divider()
+coin = st.sidebar.selectbox(t["coin"], COINS)
+tf_name = st.sidebar.selectbox(t["tf"], list(TF_MAP.keys()), index=1)
+timeframe = TF_MAP[tf_name]
 
-# =========================
-# PRICE (SAFE)
-# =========================
-def get_price(symbol):
+# Placeholder for Trade Card in Sidebar
+trade_card = st.sidebar.empty()
+
+# ==========================================
+# 2. CORE TRADING LOGIC
+# ==========================================
+def get_market_data(symbol, tf):
     try:
-        r = requests.get(
-            f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT",
-            timeout=3
-        ).json()
-        return float(r["price"])
-    except:
-        try:
-            return float(exchange.fetch_ticker(f"{symbol}/USDT")["last"])
-        except:
-            return None
-
-# =========================
-# DATA
-# =========================
-def get_data(symbol, timeframe):
-    try:
-        bars = exchange.fetch_ohlcv(f"{symbol}/USDT", timeframe=timeframe, limit=200)
-
-        df = pd.DataFrame(bars, columns=[
-            "time","open","high","low","close","volume"
-        ])
-
-        df["close"] = df["close"].astype(float)
-
+        bars = exchange.fetch_ohlcv(f"{symbol}/USDT", timeframe=tf, limit=200)
+        df = pd.DataFrame(bars, columns=["ts", "open", "high", "low", "close", "vol"])
+        
+        # Technical indicators for the model
         df["rsi"] = ta.momentum.rsi(df["close"], 14)
         df["ema50"] = ta.trend.ema_indicator(df["close"], 50)
         df["ema200"] = ta.trend.ema_indicator(df["close"], 200)
         df["return"] = df["close"].pct_change()
         df["volatility"] = df["close"].rolling(10).std()
-
-        return df.dropna()
-
+        
+        # ATR for dynamic Stop Loss and Target
+        df["atr"] = ta.volatility.average_true_range(df["high"], df["low"], df["close"], window=14)
+        
+        return df.dropna().iloc[-1]
     except:
         return None
 
-# =========================
-# UI
-# =========================
-st.subheader("💰 Live Prices")
+# ==========================================
+# 3. DASHBOARD UI
+# ==========================================
+st.title(t["title"])
+st.subheader(t["price"])
+price_cols = st.columns(len(COINS))
+placeholders = [col.empty() for col in price_cols]
 
-cols = st.columns(len(COINS))
+st.divider()
+main_signal = st.empty()
 
-for i, c in enumerate(COINS):
-    price = get_price(c)
-    cols[i].metric(c, f"${price:.2f}" if price else "—")
+# ==========================================
+# 4. LIVE EXECUTION
+# ==========================================
+while True:
+    # Update Live Prices Header
+    for i, c in enumerate(COINS):
+        try:
+            ticker = exchange.fetch_ticker(f"{c}/USDT")
+            placeholders[i].metric(c, f"${ticker['last']:.4f}")
+        except:
+            placeholders[i].metric(c, "N/A")
 
-# =========================
-# AI SIGNAL
-# =========================
-df = get_data(coin, timeframe)
-
-if df is not None:
-
-    last = df.iloc[-1]
-
-    features = [[
-        last["rsi"],
-        last["ema50"],
-        last["ema200"],
-        last["return"],
-        last["volatility"]
-    ]]
-
-    proba = model.predict_proba(features)[0]
-    buy, sell = proba[1], proba[0]
-
-    if buy > 0.7:
-        signal = "🟢 BUY"
-    elif sell > 0.7:
-        signal = "🔴 SELL"
-    else:
-        signal = "⚪ WAIT"
-
-    st.markdown(f"""
-    ## {signal}
-    💰 Price: `{last['close']:.2f}`
-    """)
-
-else:
-    st.warning("No data available")
+    # Generate Trade Setup
+    data = get_market_data(coin, timeframe)
+    
+    if model and data is not None:
+        features = [[data["rsi"], data["ema50"], data["ema200"], data["return"], data["volatility"]]]
+        confidence = model.predict_proba(features)[0][1]
+        
+        # --- Trade Geometry ---
+        curr_price = data["close"]
+        atr = data["atr"]
+        
+        # Entry: Near EMA50 or Current if strong trend
+        entry = data["ema50"] if curr_price > data["ema50"] else curr_price
+        
+        # Dynamic TP/SL using ATR (Volatility-based)
+        stop_loss = entry - (atr * 1.5)
+        take_profit = entry + (atr * 3.0) # Risk/Reward 1:2
+        
+        # UI Updates
+        color = "#00ff00" if confidence > 0.7 else "#ff0000" if confidence < 0.3 else "#ffaa00"
+        
+        # Sidebar Trade Card
+        trade_card.markdown(f"""
+        ### 📋 Trade Setup
+        ---
+        **{t['entry']}:** `${entry:.4f}`
+        **{t['tp']}:** `${take_profit:.4f}`
+        **{t['sl']}:** `${stop_loss:.4f}`
+        """)
+        
+        # Main Dashboard Signal
+        main_signal.markdown(f"""
+        <div style="padding:40px; border-radius:15px; border: 4px solid {color}; text-align:center; background-color:#111111;">
+            <h1 style="color:{color}; font-size:60px; margin:0;">{confidence:.1%}</h1>
+            <p style="color:white; font-size:24px;">{t['signal']}</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    time.sleep(15)
